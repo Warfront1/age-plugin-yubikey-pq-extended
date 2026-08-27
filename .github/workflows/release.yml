@@ -14,6 +14,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   SOURCE_REPO: Warfront1/age-plugin-yubikey
   SOURCE_REF: 5ba2621448c63f19e805bc33c8b71e8fa1de4e5e
@@ -40,11 +44,13 @@ jobs:
           - name: macos-x86_64
             os: macos-13
             target: x86_64-apple-darwin
+            build_flags: --target x86_64-apple-darwin
             archive_name: age-plugin-yubikey-pq-extended.tar.gz
             artifact_name: macos-x86_64-tarball
           - name: macos-arm64
             os: macos-latest
             target: aarch64-apple-darwin
+            build_flags: --target aarch64-apple-darwin
             archive_name: age-plugin-yubikey-pq-extended.tar.gz
             artifact_name: macos-arm64-tarball
           - name: windows
@@ -79,6 +85,7 @@ jobs:
       - name: Capture fork source commit SHA
         shell: bash
         run: |
+          set -euo pipefail
           git rev-parse HEAD > source-sha.txt
           git rev-parse --short HEAD > source-sha-short.txt
           echo "Resolved fork source commit: $(cat source-sha.txt)"
@@ -87,6 +94,7 @@ jobs:
       - name: Create archive (non-Windows)
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p release/age-plugin-yubikey-pq-extended
           if [ -n "${{ matrix.target }}" ]; then
             cp "target/${{ matrix.target }}/release/age-plugin-yubikey" release/age-plugin-yubikey-pq-extended/
@@ -99,6 +107,7 @@ jobs:
       - name: Create archive (Windows)
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p release/age-plugin-yubikey-pq-extended
           cp target/release/age-plugin-yubikey.exe release/age-plugin-yubikey-pq-extended/
           cd release/
@@ -158,6 +167,7 @@ jobs:
       - name: Capture fork source commit SHA
         shell: bash
         run: |
+          set -euo pipefail
           git rev-parse HEAD > source-sha.txt
           git rev-parse --short HEAD > source-sha-short.txt
           echo "Resolved fork source commit: $(cat source-sha.txt)"
@@ -178,6 +188,9 @@ jobs:
     needs: [build, deb]
     permissions:
       contents: write
+      id-token: write
+      attestations: write
+    if: github.ref == 'refs/heads/main' || github.event_name == 'push'
 
     steps:
       - name: Download all artifacts
@@ -188,9 +201,11 @@ jobs:
       - name: Resolve and validate tag name
         shell: bash
         env:
+          EVENT_NAME: ${{ github.event_name }}
           TAG_NAME_INPUT: ${{ inputs.tag_name }}
         run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
+          set -euo pipefail
+          if [ "${EVENT_NAME}" = "push" ]; then
             TAG_NAME="${GITHUB_REF#refs/tags/}"
           else
             TAG_NAME="${TAG_NAME_INPUT}"
@@ -206,6 +221,7 @@ jobs:
       - name: Read fork source commit SHA
         shell: bash
         run: |
+          set -euo pipefail
           SHA_FULL=$(find release-assets -name source-sha.txt -print -quit | xargs cat | head -n1 | tr -d '[:space:]')
           SHA_SHORT=$(find release-assets -name source-sha-short.txt -print -quit | xargs cat | head -n1 | tr -d '[:space:]')
           # Validate SHA values before use.
@@ -225,7 +241,7 @@ jobs:
       - name: Rename and consolidate assets
         shell: bash
         run: |
-          set -eu
+          set -euo pipefail
           mkdir -p staging
           PREFIX="age-plugin-yubikey-pq-extended-${SHA_SHORT}"
 
@@ -241,6 +257,7 @@ jobs:
       - name: Compute SHA256 checksums
         shell: bash
         run: |
+          set -euo pipefail
           cd staging
           sha256sum *.tar.gz *.deb *.zip > SHA256SUMS.txt
           echo "SHA256SUMS.txt contents:"
@@ -283,3 +300,11 @@ jobs:
             staging/*.deb
             staging/*.zip
             staging/SHA256SUMS.txt
+
+      - name: Generate build provenance attestation
+        uses: actions/attest-build-provenance@92c65d2898f1f53cfdc910b962cecff86e7f8fcc # v1
+        with:
+          subject-path: |
+            staging/*.tar.gz
+            staging/*.deb
+            staging/*.zip
