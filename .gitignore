@@ -1,0 +1,10 @@
+/target/
+Cargo.lock
+*.deb
+*.tar.gz
+*.zip
+SHA256SUMS.txt
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

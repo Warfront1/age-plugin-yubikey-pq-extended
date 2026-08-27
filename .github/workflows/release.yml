@@ -1,0 +1,285 @@
+name: Publish release binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name for the release'
+        required: true
+        default: 'v0.9.0-pre.0-pq.1'
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_REPO: Warfront1/age-plugin-yubikey
+  SOURCE_REF: 5ba2621448c63f19e805bc33c8b71e8fa1de4e5e
+  SOURCE_BRANCH: mlkem768p256tag-yubikey-0.9.0-pre.0
+  RUST_TOOLCHAIN: '1.85.0'
+
+jobs:
+  build:
+    name: Build for ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        name:
+          - linux
+          - macos-x86_64
+          - macos-arm64
+          - windows
+        include:
+          - name: linux
+            os: ubuntu-latest
+            archive_name: age-plugin-yubikey-pq-extended.tar.gz
+            artifact_name: linux-tarball
+          - name: macos-x86_64
+            os: macos-13
+            target: x86_64-apple-darwin
+            archive_name: age-plugin-yubikey-pq-extended.tar.gz
+            artifact_name: macos-x86_64-tarball
+          - name: macos-arm64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            archive_name: age-plugin-yubikey-pq-extended.tar.gz
+            artifact_name: macos-arm64-tarball
+          - name: windows
+            os: windows-latest
+            archive_name: age-plugin-yubikey-pq-extended.zip
+            artifact_name: windows-zip
+
+    steps:
+      - name: Checkout source repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ${{ env.SOURCE_REPO }}
+          ref: ${{ env.SOURCE_REF }}
+          fetch-depth: 1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
+        if: matrix.target != ''
+
+      - name: Install Linux build dependencies
+        run: sudo apt-get install -y libpcsclite-dev pkg-config
+        if: matrix.name == 'linux'
+
+      - name: Build
+        run: cargo build --release --locked ${{ matrix.build_flags }}
+
+      - name: Capture fork source commit SHA
+        shell: bash
+        run: |
+          git rev-parse HEAD > source-sha.txt
+          git rev-parse --short HEAD > source-sha-short.txt
+          echo "Resolved fork source commit: $(cat source-sha.txt)"
+          echo "SHORT_SHA=$(cat source-sha-short.txt)" >> $GITHUB_ENV
+
+      - name: Create archive (non-Windows)
+        shell: bash
+        run: |
+          mkdir -p release/age-plugin-yubikey-pq-extended
+          if [ -n "${{ matrix.target }}" ]; then
+            cp "target/${{ matrix.target }}/release/age-plugin-yubikey" release/age-plugin-yubikey-pq-extended/
+          else
+            cp "target/release/age-plugin-yubikey" release/age-plugin-yubikey-pq-extended/
+          fi
+          tar czf ${{ matrix.archive_name }} -C release/ age-plugin-yubikey-pq-extended/
+        if: matrix.name != 'windows'
+
+      - name: Create archive (Windows)
+        shell: bash
+        run: |
+          mkdir -p release/age-plugin-yubikey-pq-extended
+          cp target/release/age-plugin-yubikey.exe release/age-plugin-yubikey-pq-extended/
+          cd release/
+          7z.exe a ../${{ matrix.archive_name }} age-plugin-yubikey-pq-extended/
+        if: matrix.name == 'windows'
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            ${{ matrix.archive_name }}
+            source-sha.txt
+            source-sha-short.txt
+          retention-days: 1
+
+  deb:
+    name: Debian package for Linux
+    runs-on: ubuntu-latest
+    env:
+      TARGET: x86_64-unknown-linux-gnu
+
+    steps:
+      - name: Checkout source repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ${{ env.SOURCE_REPO }}
+          ref: ${{ env.SOURCE_REF }}
+          fetch-depth: 1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Add Rust target
+        run: rustup target add ${{ env.TARGET }}
+
+      - name: Install cargo-deb
+        uses: baptiste0928/cargo-install@0f9287ef7fc8a8d572ce269250936ded8fbc5323 # v3
+        with:
+          crate: cargo-deb
+          version: '=3.7.0'
+
+      - name: Install build dependencies
+        run: sudo apt-get install -y libpcsclite-dev pkg-config
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ env.TARGET }}
+
+      - name: Generate manpages
+        run: cargo run --example generate-docs
+
+      - name: Build Debian package
+        run: cargo deb --package age-plugin-yubikey --no-build --target ${{ env.TARGET }}
+
+      - name: Capture fork source commit SHA
+        shell: bash
+        run: |
+          git rev-parse HEAD > source-sha.txt
+          git rev-parse --short HEAD > source-sha-short.txt
+          echo "Resolved fork source commit: $(cat source-sha.txt)"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux-deb
+          path: |
+            target/${{ env.TARGET }}/debian/*.deb
+            source-sha.txt
+            source-sha-short.txt
+          retention-days: 1
+
+  release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build, deb]
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: release-assets
+
+      - name: Resolve and validate tag name
+        shell: bash
+        env:
+          TAG_NAME_INPUT: ${{ inputs.tag_name }}
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAG_NAME="${GITHUB_REF#refs/tags/}"
+          else
+            TAG_NAME="${TAG_NAME_INPUT}"
+          fi
+          # Validate tag format to prevent injection / malformed release tags.
+          if ! echo "${TAG_NAME}" | grep -Eq '^v[0-9]+(\.[0-9]+)*(-[A-Za-z0-9._]+)*$'; then
+            echo "::error::Invalid tag name '${TAG_NAME}'. Must match '^v[0-9]+...' (semver-ish)."
+            exit 1
+          fi
+          echo "TAG_NAME=${TAG_NAME}" >> $GITHUB_ENV
+          echo "Resolved release tag: ${TAG_NAME}"
+
+      - name: Read fork source commit SHA
+        shell: bash
+        run: |
+          SHA_FULL=$(find release-assets -name source-sha.txt -print -quit | xargs cat | head -n1 | tr -d '[:space:]')
+          SHA_SHORT=$(find release-assets -name source-sha-short.txt -print -quit | xargs cat | head -n1 | tr -d '[:space:]')
+          # Validate SHA values before use.
+          if ! echo "${SHA_FULL}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::Invalid source SHA: '${SHA_FULL}'"
+            exit 1
+          fi
+          if ! echo "${SHA_SHORT}" | grep -Eq '^[0-9a-f]{7,40}$'; then
+            echo "::error::Invalid short source SHA: '${SHA_SHORT}'"
+            exit 1
+          fi
+          echo "SHA_FULL=${SHA_FULL}" >> $GITHUB_ENV
+          echo "SHA_SHORT=${SHA_SHORT}" >> $GITHUB_ENV
+          echo "Resolved fork source commit (full): ${SHA_FULL}"
+          echo "Resolved fork source commit (short): ${SHA_SHORT}"
+
+      - name: Rename and consolidate assets
+        shell: bash
+        run: |
+          set -eu
+          mkdir -p staging
+          PREFIX="age-plugin-yubikey-pq-extended-${SHA_SHORT}"
+
+          cp release-assets/linux-tarball/*.tar.gz "staging/${PREFIX}-x86_64-linux.tar.gz"
+          cp release-assets/linux-deb/*.deb "staging/${PREFIX}-x86_64-linux.deb"
+          cp release-assets/macos-x86_64-tarball/*.tar.gz "staging/${PREFIX}-x86_64-darwin.tar.gz"
+          cp release-assets/macos-arm64-tarball/*.tar.gz "staging/${PREFIX}-arm64-darwin.tar.gz"
+          cp release-assets/windows-zip/*.zip "staging/${PREFIX}-x86_64-windows.zip"
+
+          echo "Consolidated release assets:"
+          ls -la staging/
+
+      - name: Compute SHA256 checksums
+        shell: bash
+        run: |
+          cd staging
+          sha256sum *.tar.gz *.deb *.zip > SHA256SUMS.txt
+          echo "SHA256SUMS.txt contents:"
+          cat SHA256SUMS.txt
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          prerelease: true
+          fail_on_unmatched_files: true
+          body: |
+            # age-plugin-yubikey-pq-extended `${{ env.TAG_NAME }}`
+
+            Automated multi-platform binary release for the extended Post-Quantum (ML-KEM-768 + P-256) build of `age-plugin-yubikey`, rebased onto the `0.9.0-pre.0` codebase.
+
+            ## Source
+
+            Built from commit `${{ env.SHA_FULL }}` on the fork branch [`${{ env.SOURCE_BRANCH }}`](https://github.com/${{ env.SOURCE_REPO }}/tree/${{ env.SOURCE_BRANCH }}) of `${{ env.SOURCE_REPO }}`.
+
+            - **Source commit SHA:** `${{ env.SHA_FULL }}`
+            - **Source commit (short):** `${{ env.SHA_SHORT }}`
+            - **Source branch:** `${{ env.SOURCE_BRANCH }}`
+
+            ## Verification
+
+            See `SHA256SUMS.txt` for SHA-256 checksums of every release asset. Verify with:
+
+            ```sh
+            sha256sum -c SHA256SUMS.txt
+            ```
+
+            ## References
+
+            - [Fork Source Tree](https://github.com/${{ env.SOURCE_REPO }}/tree/${{ env.SOURCE_BRANCH }})
+            - [Comprehensive PQ Documentation & Guides](https://github.com/Warfront1/age-plugin-yubikey-pq)
+            - [Original Upstream PR #215](https://github.com/str4d/age-plugin-yubikey/pull/215)
+          files: |
+            staging/*.tar.gz
+            staging/*.deb
+            staging/*.zip
+            staging/SHA256SUMS.txt
