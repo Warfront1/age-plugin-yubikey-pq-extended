@@ -168,6 +168,10 @@ jobs:
       - name: Build Debian package
         run: cargo deb --package age-plugin-yubikey --no-build --target ${{ env.TARGET }}
 
+      - name: Stage Debian package
+        shell: bash
+        run: cp target/${{ env.TARGET }}/debian/*.deb age-plugin-yubikey-pq-extended.deb
+
       - name: Capture fork source commit SHA
         shell: bash
         run: |
@@ -181,7 +185,7 @@ jobs:
         with:
           name: linux-deb
           path: |
-            target/${{ env.TARGET }}/debian/*.deb
+            age-plugin-yubikey-pq-extended.deb
             source-sha.txt
             source-sha-short.txt
           retention-days: 1
