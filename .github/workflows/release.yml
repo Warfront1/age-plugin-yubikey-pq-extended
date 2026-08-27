@@ -46,13 +46,13 @@ jobs:
             archive_name: age-plugin-yubikey-pq-extended.tar.gz
             artifact_name: linux-tarball
           - name: macos-x86_64
-            os: macos-13
+            os: macos-26
             target: x86_64-apple-darwin
             build_flags: --target x86_64-apple-darwin
             archive_name: age-plugin-yubikey-pq-extended.tar.gz
             artifact_name: macos-x86_64-tarball
           - name: macos-arm64
-            os: macos-latest
+            os: macos-26
             target: aarch64-apple-darwin
             build_flags: --target aarch64-apple-darwin
             archive_name: age-plugin-yubikey-pq-extended.tar.gz
