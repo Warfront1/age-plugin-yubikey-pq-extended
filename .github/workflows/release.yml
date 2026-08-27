@@ -154,7 +154,7 @@ jobs:
         uses: baptiste0928/cargo-install@0f9287ef7fc8a8d572ce269250936ded8fbc5323 # v3
         with:
           crate: cargo-deb
-          version: '=3.7.0'
+          version: '=3.6.4'
 
       - name: Install build dependencies
         run: sudo apt-get install -y libpcsclite-dev pkg-config
