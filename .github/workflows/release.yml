@@ -11,7 +11,7 @@ on:
         required: true
         default: 'v0.9.0-pre.0-pq.1'
       publish:
-        description: 'Build with publishing'
+        description: 'Publish after building'
         required: true
         default: false
         type: boolean
